@@ -45,8 +45,6 @@ st.write(f"There are {private_vehicles.shape[0]} private vehicles registered in 
 
 st.write(f"There are {electric_vehicles.shape[0]} battery electric vehicles registered in NZ as of 2025")
 
-st.write(f"The average hourly usage was {round(average_hourly_usage_mw, 2)} MW")
-
 st.write(f"The average daily usage was {round(average_daily_usage_gw, 2)} GW")
 
 st.write(f"The most common EV is the {year_common_ev} {most_common_ev}")
