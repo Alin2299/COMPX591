@@ -13,26 +13,27 @@ import plotly.express as px
 
 st.title("Interactive Electricity Grid Model - Prototype 1")
 
+# Get the relevant data paths/files
 data_dir = "Data/"
-
 fleet_data_2025 = helper.load_file(f"{data_dir}Fleet-31Mar2025.csv")
 electricity_demand_ytd = helper.load_file(f"{data_dir}Zone Load Data (16 Mar - 16 Apr) [30 intervals].csv")
 
-
+# Filter and process the data
 private_vehicles = fleet_data_2025.loc[fleet_data_2025["INDUSTRY_CLASS"] == "PRIVATE"]
-
 electric_vehicles = fleet_data_2025.loc[fleet_data_2025["MOTIVE_POWER"] == "ELECTRIC"]
-
-average_hourly_usage_mw = electricity_demand_ytd["NZ TOTAL(MW)"].sum() / electricity_demand_ytd["Date"].count()
-
-average_daily_usage_gw = average_hourly_usage_mw * 24 / 1000
 
 electric_vehicles["MAKE_MODEL"] = electric_vehicles["MAKE"] + " " + electric_vehicles["MODEL"]
 
+# Get the most common EV and year in the dataset
 most_common_ev = electric_vehicles["MAKE_MODEL"].mode()[0]
-
 year_common_ev = electric_vehicles[electric_vehicles["MAKE_MODEL"] == most_common_ev]["VEHICLE_YEAR"].mode()[0]
 
+# Get electriciy demand stats
+average_hourly_usage_mw = electricity_demand_ytd["NZ TOTAL(MW)"].sum() / electricity_demand_ytd["Date"].count()
+average_daily_usage_gw = average_hourly_usage_mw * 24 / 1000
+
+
+# Display summary and relevant stats/figures
 st.markdown(
     """
     This prototype model displays some relevant statistics/figures from the existing data sources, and visualises a simple scenario
@@ -53,6 +54,7 @@ print(fleet_data_2025["INDUSTRY_CLASS"].unique())
 
 print(fleet_data_2025["MOTIVE_POWER"].unique())
 
+# Plot Electricity Demand vs Supply
 if not fleet_data_2025.empty and not electricity_demand_ytd.empty:
     chart_data = pd.DataFrame({
         "Hour": list(range(24)),
