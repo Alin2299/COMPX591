@@ -7,8 +7,8 @@ import pandas as pd
 import streamlit as st
 
 # Stops unnecessary refreshes
-@st.cache_data
-def load_file(path): 
+@st.cache_resource
+def load_file(path, num_skip_rows=0): 
     """
     Function that loads in a CSV file as a Pandas dataframe
 
@@ -16,7 +16,6 @@ def load_file(path):
 
     Returns: A dataframe containing the data from the file
     """
-
-    df = pd.read_csv(path)
+    df = pd.read_csv(path, skiprows=num_skip_rows)
 
     return df

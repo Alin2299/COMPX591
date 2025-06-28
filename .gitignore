@@ -1,3 +1,4 @@
 *.pdf
 Data
 __pycache__
+Images/

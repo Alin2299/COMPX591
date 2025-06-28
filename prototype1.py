@@ -4,10 +4,8 @@ Python file for Prototype 1 of the model, which will be able to load in and proc
 
 # Import the necessary libraries/packages
 import streamlit as st
-import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-import time
 import helper 
 import plotly.express as px
 

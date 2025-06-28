@@ -4,68 +4,94 @@ on electricity demand in New Zealand, based on selected charging behaviour.
 """
 
 import streamlit as st
-import altair as alt
 import pandas as pd
 import plotly.express as px
 import helper
 
 st.title("Interactive Electricity Grid Model - Prototype 2")
 
-# Load data
+# Load all data
 data_dir = "Data/"
-fleet_data = helper.load_file(f"{data_dir}Fleet-31Mar2025.csv")
-load_data = helper.load_file(f"{data_dir}Zone Load Data (16 Mar - 16 Apr) [30 intervals].csv")
+fleet_df = helper.load_file(f"{data_dir}Fleet-31Mar2025.csv")
+march_demand_df = helper.load_file(f"{data_dir}Demand_trends_202503.csv", 11)
+march_generation_df = helper.load_file(f"{data_dir}202503_Generation_MD.csv")
 
-# Calculate average hourly demand from real data
-average_hourly_demand = load_data["NZ TOTAL(MW)"].sum() / load_data["Date"].count()
+# Process/prepare the dataframe
+# Clean the trading period columns, including converting units to MWh
+march_generation_df = march_generation_df.drop(columns=["TP49", "TP50"])
+tp_cols = [col for col in march_generation_df.columns if col.startswith("TP")]
+march_generation_df[tp_cols] = march_generation_df[tp_cols] / 1000
 
-st.markdown("""
-Use the sliders below to simulate how increased EV uptake and charging patterns
-might affect electricity demand across a 24-hour period in New Zealand.
-""")
+# Convert to long format
+supply_long = march_generation_df.melt(
+    id_vars=["Trading_Date"],
+    value_vars=tp_cols,
+    var_name="Trading_Period",
+    value_name="MWh"
+)
+# Account for NaN values in the new column
+supply_long["MWh"] = supply_long["MWh"].fillna(0)
 
-# User inputs
-ev_uptake_percent = st.slider("Projected EV Uptake by 2030 (%)", 0, 100, 50)
-charging_pattern = st.selectbox("Preferred EV Charging Time", [
-    "Evening (6-9pm)", "Overnight (12-6am)", "Spread Throughout Day"
-])
+# Group by date and get the total supply per date, then calculate the peak, average and minimum values and dates that they fall on
+march_supply_by_day = supply_long.groupby("Trading_Date")["MWh"].sum()
 
-# Estimate extra demand (simple mock multiplier)
-extra_demand_per_percent = 20  # Arbitrary number for demo purposes
-extra_demand_total = ev_uptake_percent * extra_demand_per_percent  # MWh total
+peak_day = march_supply_by_day.idxmax()
+peak_value = march_supply_by_day.max()
 
-# Distribute extra demand over hours based on charging pattern
-hourly_demand = []
-for hour in range(24):
-    base = average_hourly_demand
-    extra = 0
+average_value = march_supply_by_day.mean()
+average_day = (march_supply_by_day - average_value).abs().idxmin()
 
-    if charging_pattern == "Evening (6-9pm)" and 18 <= hour <= 20:
-        extra = extra_demand_total / 3
-    elif charging_pattern == "Overnight (12-6am)" and 0 <= hour <= 5:
-        extra = extra_demand_total / 6
-    elif charging_pattern == "Spread Throughout Day":
-        extra = extra_demand_total / 24
+min_day = march_supply_by_day.idxmin()
+min_value = march_supply_by_day.min()
 
-    hourly_demand.append(base + extra)
+# Expand the supply data into wide format, with each trading date having multiple trading period columns
+supply_by_date_period = supply_long.groupby(["Trading_Date", "Trading_Period"])["MWh"].sum().reset_index()
+supply_by_date_period = (supply_by_date_period.pivot(index="Trading_Date", columns="Trading_Period", values="MWh"))
+supply_by_date_period = supply_by_date_period[
+    sorted(supply_by_date_period.columns, key=lambda x: int(x[2:]))
+]
+supply_by_date_period = supply_by_date_period.reset_index()
 
-# Create DataFrame
-df = pd.DataFrame({
-    "Hour": list(range(24)),
-    "Simulated Demand (MWh)": hourly_demand,
-    "Supply (MWh)": [5000] * 24  # Constant assumed supply
-})
+# Process the electricity demand dataframe, including converting the units to MWh and creating two new columns for trading dates and periods
+march_demand_df["Demand (MWh)"] = march_demand_df["Demand (GWh)"] * 1000
+march_demand_df[["Trading_Date", "Trading_Period"]] = march_demand_df["Period start"].str.split(" ", expand=True)
 
-df_long = df.melt(id_vars="Hour", var_name="Type", value_name="MWh")
-
-chart = alt.Chart(df_long).mark_line().encode(
-    x='Hour:Q',
-    y='MWh:Q',
-    color='Type:N'
-).properties(
-    width=700,
-    height=400,
-    title='Simulated Demand vs Supply'
+# Group the data by date and period, with an associated total demand
+total_demand = (
+    march_demand_df.groupby(["Trading_Date", "Trading_Period"])["Demand (MWh)"].sum().reset_index()
 )
 
-st.altair_chart(chart, use_container_width=True)
+# Expand the demand data to wide format, with each trading date having rows for trading period and demand values
+wide_demand = total_demand.pivot(index="Trading_Date", columns="Trading_Period", values="Demand (MWh)").reset_index()
+wide_demand["Trading_Date"] = pd.to_datetime(wide_demand["Trading_Date"], dayfirst=True).dt.strftime("%Y-%m-%d")
+
+# Find the rows that match the desired user choice for what data to show
+desired_supply_row = supply_by_date_period[supply_by_date_period["Trading_Date"] == average_day]
+desired_demand_row = wide_demand[wide_demand["Trading_Date"] == average_day]
+
+# Extract the values ready for plotting
+supply_values = desired_supply_row.drop(columns="Trading_Date").values.flatten()
+demand_values = desired_demand_row.drop(columns="Trading_Date").values.flatten()
+
+# Create a plot of the electricity demand vs supply
+chart_data = pd.DataFrame({
+    "Trading Period": list(range(1, 49)),
+    "Demand (MWh)": demand_values,
+    "Supply (MWh)": supply_values
+})
+
+st.subheader("Electricity Supply and Demand in New Zealand by Time")
+
+fig = px.line(
+    chart_data, 
+    x="Trading Period", 
+    y=["Demand (MWh)", "Supply (MWh)"],
+    range_y=[0, chart_data[["Demand (MWh)", "Supply (MWh)"]].max().max() * 1.1]
+)
+
+fig.update_layout(
+    xaxis_title="Trading Period",
+    yaxis_title="Electricity Amount (MWh)"
+)
+
+st.plotly_chart(fig)
