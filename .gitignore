@@ -2,3 +2,5 @@
 Data
 __pycache__
 Images/
+*.bib
+.stfolder
