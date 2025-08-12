@@ -14,10 +14,19 @@ import streamlit_folium
 import folium
 import geopandas as gpd
 from shapely.geometry import Point
+from geopandas import GeoDataFrame
 from datetime import datetime, timedelta
 
 # Setup the UI and UI size, such as the title and columns
 st.set_page_config(layout="wide")
+st.markdown("""
+    <style>
+    iframe {
+        height: 700px !important;
+        max-height: 700px !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
 st.title("Interactive Electricity Grid Model - Prototype 2")
 col1, col2 = st.columns([0.5, 0.5])
 
@@ -27,6 +36,180 @@ fleet_df = helper.load_file(f"{data_dir}Fleet-31Mar2025.csv")
 march_demand_df = helper.load_file(f"{data_dir}Demand_trends_zone_202503.csv", 11)
 march_generation_df = helper.load_file(f"{data_dir}202503_Generation_MD.csv")
 region_path = f"{data_dir}WGS84_GeoJSON_Zone.JSON"
+network_mapping_df = helper.load_file(f"{data_dir}20250614_NetworkSupplyPointsTable.csv")
+
+# Variable for tracking which region has been selected 
+selected_region = "New Zealand"
+
+@st.cache_data
+def get_cleaned_fleet_df(fleet_path, ta_region_map):
+    raw_df = helper.load_file(fleet_path)
+    # ta_path =  f"{data_dir}territorial-authority-2025.json"
+    # ta_gdf = gpd.read_file(ta_path)
+
+    # # Prepare the data, including converting to the same CRS and ensuring that the geometry is valid
+    # ta_gdf = ta_gdf.to_crs(epsg=4326)
+    # region_gdf = region_gdf.to_crs(epsg=4326)
+    # region_gdf["geometry"] = region_gdf.buffer(0)
+
+    # # Spatial join the territorial authority and region data
+    # ta_with_regions = gpd.sjoin(ta_gdf, region_gdf, how="left", predicate="intersects")
+
+    # # Map the territorial authorities to the right regions, including handling uppercase words
+    # ta_region_map = dict(zip(ta_with_regions["TA2025_V_2"], ta_with_regions["Region"]))
+    # ta_region_map = {
+    #     k.upper(): v.upper()
+    #     for k, v in ta_region_map.items()
+    # }
+    raw_df["REGION"] = raw_df["TLA"].map(ta_region_map)
+
+    raw_df = raw_df[raw_df["REGION"].notna()].copy()
+    raw_df = raw_df[raw_df["MOTIVE_POWER"] != "OTHER"]
+
+    return raw_df
+
+@st.cache_data
+def build_region_fleet_summary(fleet_df):
+    # Get the list of regions that the vehicles could be associated with from the dataframe
+    vehicle_regions = fleet_df_2025["REGION"].unique()
+
+    # For each region, create a row that contains information about the size and characteristics/composition of the vehicles in that region
+    rows_list = []
+
+    for region in vehicle_regions:
+        filtered_fleet_df = fleet_df_2025[fleet_df_2025["REGION"] == region]
+
+        num_light_vehicles = filtered_fleet_df[filtered_fleet_df["GROSS_VEHICLE_MASS"] <= 3500].shape[0]
+        num_heavy_vehicles = filtered_fleet_df[filtered_fleet_df["GROSS_VEHICLE_MASS"] > 3500].shape[0]
+
+        electric_mask = (filtered_fleet_df["MOTIVE_POWER"].isin(["ELECTRIC", "ELECTRIC [PETROL EXTENDED]", "ELECTRIC FUEL CELL HYDROGEN"])) | (filtered_fleet_df["MOTIVE_POWER"].str.contains("PLUGIN", na=False))
+        num_electric_vehicles = filtered_fleet_df[electric_mask].shape[0]
+        num_combustion_vehicles = filtered_fleet_df[~electric_mask].shape[0]
+
+        rows_list.append({
+            "Region": region,
+            "Light Vehicle Count": num_light_vehicles,
+            "Heavy Vehicle Count": num_heavy_vehicles,
+            "Electric Vehicle Count": num_electric_vehicles,
+            "Combustion Vehicle Count": num_combustion_vehicles
+        })
+
+    return pd.DataFrame(rows_list).set_index("Region")
+
+
+# Code for displaying the interactive map of New Zealand
+
+# Load the GeoJSON electricity grid regions data
+with open(region_path) as f:
+    region_gj = json.load(f)
+
+# Create a base map
+region_map = folium.Map(
+        location=[-41, 174], 
+        zoom_start=5, 
+        height="700px",
+        dragging=False,
+        zoom_control=False,
+        scrollWheelZoom=False,
+        doubleClickZoom=False,
+    )
+folium.GeoJson(
+    region_gj,
+    tooltip=folium.GeoJsonTooltip(
+        fields=["Region"],
+        aliases=["Region"],
+        localize=True
+    )
+).add_to(region_map)
+
+# Display the map in Streamlit
+with col2:
+    result = streamlit_folium.st_folium(region_map, width=700, height=700)
+
+# Get the fleet data and map that shows current territorial authorities
+# fleet_df_2025 = helper.load_file(f"{data_dir}Fleet-31Mar2025.csv")
+
+ta_path =  f"{data_dir}territorial-authority-2025.json"
+ta_gdf = gpd.read_file(ta_path)
+region_gdf = gpd.read_file(region_path)
+
+# Prepare the data, including converting to the same CRS and ensuring that the geometry is valid
+ta_gdf = ta_gdf.to_crs(epsg=4326)
+region_gdf = region_gdf.to_crs(epsg=4326)
+region_gdf["geometry"] = region_gdf.buffer(0)
+
+# Spatial join the territorial authority and region data
+ta_with_regions = gpd.sjoin(ta_gdf, region_gdf, how="left", predicate="intersects")
+
+# Map the territorial authorities to the right regions, including handling uppercase words
+ta_region_map = dict(zip(ta_with_regions["TA2025_V_2"], ta_with_regions["Region"]))
+ta_region_map = {
+    k.upper(): v.upper()
+    for k, v in ta_region_map.items()
+}
+
+fleet_df_2025 = get_cleaned_fleet_df(f"{data_dir}Fleet-31Mar2025.csv", ta_region_map)
+# fleet_df_2025["REGION"] = fleet_df_2025["TLA"].map(ta_region_map)
+
+# fleet_df_2025 = fleet_df_2025[fleet_df_2025["REGION"].notna()].copy()
+# fleet_df_2025 = fleet_df_2025[fleet_df_2025["MOTIVE_POWER"] != "OTHER"]
+
+# Create a new simplified dataframe for storing information about the fleet, its composition, and for handling the different scenarios
+
+# # Get the list of regions that the vehicles could be associated with from the dataframe
+# vehicle_regions = fleet_df_2025["REGION"].unique()
+
+# # For each region, create a row that contains information about the size and characteristics/composition of the vehicles in that region
+# rows_list = []
+
+# for region in vehicle_regions:
+#     filtered_fleet_df = fleet_df_2025[fleet_df_2025["REGION"] == region]
+
+#     num_light_vehicles = filtered_fleet_df[filtered_fleet_df["GROSS_VEHICLE_MASS"] <= 3500].shape[0]
+#     num_heavy_vehicles = filtered_fleet_df[filtered_fleet_df["GROSS_VEHICLE_MASS"] > 3500].shape[0]
+
+#     electric_mask = (filtered_fleet_df["MOTIVE_POWER"].isin(["ELECTRIC", "ELECTRIC [PETROL EXTENDED]", "ELECTRIC FUEL CELL HYDROGEN"])) | (filtered_fleet_df["MOTIVE_POWER"].str.contains("PLUGIN", na=False))
+#     num_electric_vehicles = filtered_fleet_df[electric_mask].shape[0]
+#     num_combustion_vehicles = filtered_fleet_df[~electric_mask].shape[0]
+
+#     rows_list.append({
+#         "Region": region,
+#         "Light Vehicle Count": num_light_vehicles,
+#         "Heavy Vehicle Count": num_heavy_vehicles,
+#         "Electric Vehicle Count": num_electric_vehicles,
+#         "Combustion Vehicle Count": num_combustion_vehicles
+#     })
+
+# region_fleet_df = pd.DataFrame(rows_list)
+# region_fleet_df.set_index("Region", inplace=True)
+
+region_fleet_df = build_region_fleet_summary(fleet_df_2025)
+
+# Handle interactivity on the map
+if result["last_clicked"] is not None:
+    clicked_point = Point(result["last_clicked"]["lng"], result["last_clicked"]["lat"])
+    match = region_gdf[region_gdf.geometry.contains(clicked_point)]
+    
+    if not match.empty:
+        selected_region = match["Region"].iloc[0]
+
+# Show the number of electric vehicles present in the currently selected region
+# if selected_region != "New Zealand":
+#     num_evs_region = ((fleet_df_2025["MOTIVE_POWER"] == "ELECTRIC") & (fleet_df_2025["REGION"] == selected_region.upper())).sum()
+# else:
+#     num_evs_region = (fleet_df_2025["MOTIVE_POWER"] == "ELECTRIC").sum()
+
+# with col2:
+#     st.write(f"There are {num_evs_region} electric vehicles in {selected_region}")
+
+if selected_region != "New Zealand":
+    num_evs_region = region_fleet_df.loc[selected_region.upper(), "Electric Vehicle Count"]
+else:
+    num_evs_region = region_fleet_df["Electric Vehicle Count"].sum()
+
+with col2:
+    st.write(f"There are {num_evs_region} electric vehicles in {selected_region}")
+
 
 # Code for displaying the  electricity demand and supply graph
 
@@ -35,6 +218,44 @@ region_path = f"{data_dir}WGS84_GeoJSON_Zone.JSON"
 march_generation_df = march_generation_df.drop(columns=["TP49", "TP50"])
 tp_cols = [col for col in march_generation_df.columns if col.startswith("TP")]
 march_generation_df[tp_cols] = march_generation_df[tp_cols] / 1000
+
+# Join the demand dataframe to the network supply points table dataframe so that NZTM location data can be used to map generation data to specific regions
+
+# Make the key columns that are to be joined consistent, then perform a left join on the generation data
+network_mapping_df.rename(columns={"POC code" : "POC_Code"}, inplace=True)
+network_mapping_df = network_mapping_df.drop_duplicates(subset="POC_Code")
+
+march_generation_df = march_generation_df.merge(network_mapping_df[["POC_Code", "NZTM easting", "NZTM northing"]], left_on="POC_Code", right_on="POC_Code")
+
+# Define a mapping for handling cases such as where NZTM data is missing in the network supply table, then apply it
+override_map = {
+    "HRP2201": "Central North Island",
+    "JRD1101": "Lower North Island",
+    "TAB0331": "Central North Island",
+    "TAB2201": "Central North Island",
+    "BEN2202": "Lower South Island"
+}
+
+condition = march_generation_df["NZTM easting"].isna()
+march_generation_df["Region"] = march_generation_df["POC_Code"].map(override_map)
+
+march_generation_df["geometry"] = march_generation_df.apply(lambda row: Point(row["NZTM easting"], row["NZTM northing"]), axis=1)
+
+generation_gdf = GeoDataFrame(
+    data = march_generation_df,
+    geometry = march_generation_df["geometry"],
+    crs = "EPSG:2193"
+)
+generation_gdf = generation_gdf.to_crs(epsg=4326)
+
+result_gdf = gpd.sjoin(generation_gdf, region_gdf, how="left", predicate="within")
+
+region_lookup = result_gdf.drop_duplicates(subset="POC_Code")[["POC_Code", "Region_right"]]
+march_generation_df = march_generation_df.merge(region_lookup, on="POC_Code", how="left")
+march_generation_df["Region"] = march_generation_df["Region"].fillna(march_generation_df.pop("Region_right")) 
+
+if selected_region != "New Zealand":
+    march_generation_df = march_generation_df[march_generation_df["Region"] == selected_region]
 
 # Convert to long format
 supply_long = march_generation_df.melt(
@@ -70,6 +291,9 @@ supply_by_date_period = supply_by_date_period.reset_index()
 march_demand_df["Demand (MWh)"] = march_demand_df["Demand (GWh)"] * 1000
 march_demand_df[["Trading_Date", "Trading_Period"]] = march_demand_df["Period start"].str.split(" ", expand=True)
 
+if selected_region != "New Zealand":
+    march_demand_df = march_demand_df[march_demand_df["Region"] == selected_region]
+
 # Group the data by date and period, with an associated total demand
 total_demand = (
     march_demand_df.groupby(["Trading_Date", "Trading_Period"])["Demand (MWh)"].sum().reset_index()
@@ -79,13 +303,27 @@ total_demand = (
 wide_demand = total_demand.pivot(index="Trading_Date", columns="Trading_Period", values="Demand (MWh)").reset_index()
 wide_demand["Trading_Date"] = pd.to_datetime(wide_demand["Trading_Date"], dayfirst=True).dt.strftime("%Y-%m-%d")
 
+# Create filtered datasets that only show data on weekdays
+wide_demand["Trading_Date"]  = pd.to_datetime(wide_demand["Trading_Date"])
+
+supply_by_date_period["Trading_Date"]  = pd.to_datetime(supply_by_date_period["Trading_Date"])
+
+with col1:
+    day_options = ["Mon", "Tues", "Wed", "Thurs", "Fri", "Sat", "Sun"]
+    selected_day = st.selectbox(label="Day selector", options=day_options)
+
+
 # Find the rows that match the desired user choice for what data to show
-desired_supply_row = supply_by_date_period[supply_by_date_period["Trading_Date"] == average_day]
-desired_demand_row = wide_demand[wide_demand["Trading_Date"] == average_day]
+# desired_supply_row = supply_by_date_period[supply_by_date_period["Trading_Date"] == average_day]
+# desired_demand_row = wide_demand[wide_demand["Trading_Date"] == average_day]
 
 # Extract the values ready for plotting
-supply_values = desired_supply_row.drop(columns="Trading_Date").values.flatten()
-demand_values = desired_demand_row.drop(columns="Trading_Date").values.flatten()
+# supply_values = desired_supply_row.drop(columns="Trading_Date").values.flatten()
+# demand_values = desired_demand_row.drop(columns="Trading_Date").values.flatten()
+
+supply_values = supply_by_date_period[supply_by_date_period["Trading_Date"].dt.dayofweek == day_options.index(selected_day)].select_dtypes(include="number").mean(axis=0)
+demand_values = wide_demand[wide_demand["Trading_Date"].dt.dayofweek == day_options.index(selected_day)].select_dtypes(include="number").mean(axis=0)
+
 
 # Generate a list of plot time strings
 half_hour_times = [
@@ -96,8 +334,8 @@ half_hour_times = [
 # Create a plot of the electricity demand vs supply
 chart_data = pd.DataFrame({
     "Time": half_hour_times,
-    "Demand (MWh)": demand_values,
-    "Supply (MWh)": supply_values
+    "Demand (MWh)": demand_values.values,
+    "Supply (MWh)": supply_values.values
 })
 
 fig = px.line(
@@ -112,70 +350,11 @@ fig.update_layout(
     yaxis_title="Electricity Amount (MWh)",
     xaxis = dict(
         dtick=6
-    )
+    ),
+    height=500
 )
 
+
 with col1:
-    st.subheader("Electricity Supply and Demand in New Zealand by Time")
+    st.subheader(f"Average Electricity Supply and Demand in by Time for {selected_region}")
     st.plotly_chart(fig)
-
-
-# Code for displaying the interactive map of New Zealand
-
-# Load the GeoJSON electricity grid regions data
-with open(region_path) as f:
-    region_gj = json.load(f)
-
-# Create a base map
-region_map = folium.Map(location=[-41, 174], zoom_start=5, height="700px")
-folium.GeoJson(
-    region_gj,
-    tooltip=folium.GeoJsonTooltip(
-        fields=["Region"],
-        aliases=["Region"],
-        localize=True
-    )
-).add_to(region_map)
-
-# Display the map in Streamlit
-with col2:
-    result = streamlit_folium.st_folium(region_map, width=700, height=700)
-
-# Get the fleet data and map that shows current territorial authorities
-fleet_df_2025 = helper.load_file(f"{data_dir}Fleet-31Mar2025.csv")
-ta_path =  f"{data_dir}territorial-authority-2025.json"
-ta_gdf = gpd.read_file(ta_path)
-region_gdf = gpd.read_file(region_path)
-
-# Prepare the data, including converting to the same CRS and ensuring that the geometry is valid
-ta_gdf = ta_gdf.to_crs(epsg=4326)
-region_gdf = region_gdf.to_crs(epsg=4326)
-region_gdf["geometry"] = region_gdf.buffer(0)
-
-# Spatial join the territorial authority and region data
-ta_with_regions = gpd.sjoin(ta_gdf, region_gdf, how="left", predicate="intersects")
-
-# Map the territorial authorities to the right regions, including handling uppercase words
-ta_region_map = dict(zip(ta_with_regions["TA2025_V_2"], ta_with_regions["Region"]))
-ta_region_map = {
-    k.upper(): v.upper()
-    for k, v in ta_region_map.items()
-}
-fleet_df_2025["REGION"] = fleet_df_2025["TLA"].map(ta_region_map)
-
-print(fleet_df_2025.head())
-
-# Handle interactivity on the map
-matched_region = None
-if result["last_clicked"] is not None:
-    clicked_point = Point(result["last_clicked"]["lng"], result["last_clicked"]["lat"])
-    match = region_gdf[region_gdf.geometry.contains(clicked_point)]
-    
-    if not match.empty:
-        matched_region = match["Region"].iloc[0]
-
-# Show the number of electric vehicles present in the currently selected region
-if matched_region is not None:
-    num_evs_region = ((fleet_df_2025["MOTIVE_POWER"] == "ELECTRIC") & (fleet_df_2025["REGION"] == matched_region.upper())).sum()
-    with col2:
-        st.write(f"There are {num_evs_region} electric vehicles in {matched_region}")
