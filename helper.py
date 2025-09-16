@@ -34,7 +34,7 @@ def get_electric_mask(df):
     electric_mask = (df["MOTIVE_POWER"].isin(["ELECTRIC", "ELECTRIC [PETROL EXTENDED]", "ELECTRIC FUEL CELL HYDROGEN"])) | (df["MOTIVE_POWER"].str.contains("PLUGIN", na=False))
     return electric_mask
 
-@st.cache_data
+@st.cache_resource
 def get_cleaned_fleet_df(fleet_path, ta_region_map):
     """
     Function that processes and maps the fleet dataframe to the regions so that caching works as expected 
@@ -56,7 +56,7 @@ def get_cleaned_fleet_df(fleet_path, ta_region_map):
 
     return raw_df
 
-@st.cache_data
+@st.cache_resource
 def build_region_fleet_summary(fleet_df):
     """
     Function that creates a summary dataframe of the New Zealand fleet composition and information, by region, for use in scenarios and interactivity
@@ -97,23 +97,17 @@ def build_region_fleet_summary(fleet_df):
 
     return summary_df
 
-@st.cache_data
-def get_avg_profiles(region, day_index, supply_df, demand_df):
+@st.cache_resource
+def get_avg_profiles(day_index, supply_df, demand_df):
     """
     Function that calculates the average supply and demand profile for a given region and weekday index
 
-    region: The region to be filtered on
     day_index: The array index that corresponds to the user-selected day of the week to be profiled
     supply_df: The processed electricity supply dataframe
     demand_df: The processed electricity demand dataframe
 
-    Returns: The average electricity supply and demand profiles for the supplied region and weekday
+    Returns: The average electricity supply and demand profiles
     """
-
-    if region != "New Zealand":
-        supply_df = supply_df[supply_df["Region"] == region]
-        demand_df = demand_df[demand_df["Region"] == region]
-
     supply_df["Trading_Date"] = pd.to_datetime(supply_df["Trading_Date"])
     demand_df["Trading_Date"] = pd.to_datetime(demand_df["Trading_Date"])
 
@@ -123,8 +117,8 @@ def get_avg_profiles(region, day_index, supply_df, demand_df):
     return demand_avg, supply_avg
 
 
-@st.cache_data
-def get_ta_region_map(ta_path, region_path):
+@st.cache_resource
+def get_ta_region_map(ta_path, _region_gdf):
     """
     Function that maps NZ territorial authorities to the given region data
 
@@ -134,10 +128,12 @@ def get_ta_region_map(ta_path, region_path):
     Returns: A processed dictionary representing the final joined data/mapping
     """
     ta_gdf = gpd.read_file(ta_path).to_crs(epsg=4326)
-    region_gdf = gpd.read_file(region_path).to_crs(epsg=4326)
+    region_gdf = _region_gdf.to_crs(epsg=4326)
     region_gdf["geometry"] = region_gdf.buffer(0)
 
     ta_with_regions = gpd.sjoin(ta_gdf, region_gdf, how="left", predicate="intersects")
 
+    # Handle uppercase words
     ta_region_map = dict(zip(ta_with_regions["TA2025_V_2"], ta_with_regions["Region"]))
     return {k.upper(): v.upper() for k, v in ta_region_map.items()}
+

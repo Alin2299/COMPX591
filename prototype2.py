@@ -3,11 +3,11 @@ Python file for Prototype 2 of the model that allows users to simulate the effec
 on electricity demand in New Zealand, based on selected charging behaviour.
 """
 
+# Import all necessary libraries/dependencies
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import helper
-import matplotlib as plt
 import json
 import streamlit_folium
 import folium
@@ -30,20 +30,18 @@ st.markdown("""
 st.title("Interactive Electricity Grid Model - Prototype 2")
 col1, col2 = st.columns([0.5, 0.5])
 
-# Load all relevant data
-import time
-
+# Define paths for and load relevant data
 data_dir = "Data/"
 fleet_df = helper.load_file(f"{data_dir}Fleet-31Mar2025.csv")
 march_demand_df = helper.load_file(f"{data_dir}Demand_trends_zone_202503.csv", 11)
 march_generation_df = helper.load_file(f"{data_dir}202503_Generation_MD.csv")
 region_path = f"{data_dir}WGS84_GeoJSON_Zone.JSON"
 network_mapping_df = helper.load_file(f"{data_dir}20250614_NetworkSupplyPointsTable.csv")
-
+ta_path =  f"{data_dir}territorial-authority-2025.json"
+region_gdf = gpd.read_file(region_path)
 
 # Variable for tracking which region has been selected 
 selected_region = "New Zealand"
-
 
 # Code for displaying the interactive map of New Zealand
 
@@ -72,33 +70,12 @@ folium.GeoJson(
 
 # Display the map in Streamlit
 with col2:
-    result = streamlit_folium.st_folium(region_map, width=700, height=700)
+    result = streamlit_folium.st_folium(region_map, width=700, height=700, key="nzmap")
 
-# Get the fleet data and map that shows current territorial authorities
-# fleet_df_2025 = helper.load_file(f"{data_dir}Fleet-31Mar2025.csv")
 
-ta_path =  f"{data_dir}territorial-authority-2025.json"
-ta_gdf = gpd.read_file(ta_path)
-region_gdf = gpd.read_file(region_path)
-
-# Prepare the data, including converting to the same CRS and ensuring that the geometry is valid
-ta_gdf = ta_gdf.to_crs(epsg=4326)
-region_gdf = region_gdf.to_crs(epsg=4326)
-region_gdf["geometry"] = region_gdf.buffer(0)
-
-# Spatial join the territorial authority and region data
-# ta_with_regions = gpd.sjoin(ta_gdf, region_gdf, how="left", predicate="intersects")
-
-# Map the territorial authorities to the right regions, including handling uppercase words
-# ta_region_map = dict(zip(ta_with_regions["TA2025_V_2"], ta_with_regions["Region"]))
-# ta_region_map = {
-#     k.upper(): v.upper()
-#     for k, v in ta_region_map.items()
-# }
-ta_region_map = helper.get_ta_region_map(ta_path, region_path)
-
+# Use helper functions to map territorial authority data to regions, load the fleet data , and build the fleet summary dataframe
+ta_region_map = helper.get_ta_region_map(ta_path, region_gdf)
 fleet_df_2025 = helper.get_cleaned_fleet_df(f"{data_dir}Fleet-31Mar2025.csv", ta_region_map)
-
 region_fleet_df = helper.build_region_fleet_summary(fleet_df_2025)
 
 # Handle interactivity on the map
@@ -109,14 +86,12 @@ if result["last_clicked"] is not None:
     if not match.empty:
         selected_region = match["Region"].iloc[0]
 
-
-# if selected_region != "New Zealand":
+# Get the electric vehicle counts for the current region
 light_evs_region = region_fleet_df.loc[selected_region.upper(), "Light Electric Vehicle Count"]
 heavy_evs_region = region_fleet_df.loc[selected_region.upper(), "Heavy Electric Vehicle Count"]
 num_evs_region = light_evs_region + heavy_evs_region
-# else:
-#     num_evs_region = region_fleet_df["Light Electric Vehicle Count"].sum() + region_fleet_df["Heavy Electric Vehicle Count"].sum()
 
+# Display the number of electric vehicles in the region, including the most common light and heavy electric vehicle make and model
 with col2:
     st.write(f"There are {num_evs_region} electric vehicles in {selected_region}")
 
@@ -136,7 +111,6 @@ with col2:
 
     st.write(f"The most common heavy EV is the {year_common_heavy_ev} {most_common_heavy_ev}")
 
-
     most_common_light_ev = light_ev_df["MAKE_MODEL"].mode()[0]
     year_common_light_ev = light_ev_df[
         light_ev_df["MAKE_MODEL"] == most_common_light_ev
@@ -145,15 +119,15 @@ with col2:
     st.write(f"The most common light EV is the {year_common_light_ev} {most_common_light_ev}")
 
 
-
-
 # Code for displaying the  electricity demand and supply graph
 
 # Process/prepare the generation dataframe
+
 # Clean the trading period columns, including converting units to MWh
 march_generation_df = march_generation_df.drop(columns=["TP49", "TP50"])
 tp_cols = [col for col in march_generation_df.columns if col.startswith("TP")]
 march_generation_df[tp_cols] = march_generation_df[tp_cols] / 1000
+
 
 # Join the demand dataframe to the network supply points table dataframe so that NZTM location data can be used to map generation data to specific regions
 
@@ -175,8 +149,12 @@ override_map = {
 condition = march_generation_df["NZTM easting"].isna()
 march_generation_df["Region"] = march_generation_df["POC_Code"].map(override_map)
 
-march_generation_df["geometry"] = march_generation_df.apply(lambda row: Point(row["NZTM easting"], row["NZTM northing"]), axis=1)
+# march_generation_df["geometry"] = march_generation_df.apply(lambda row: Point(row["NZTM easting"], row["NZTM northing"]), axis=1)
+march_generation_df = march_generation_df.dropna(subset=["NZTM easting","NZTM northing"]).copy()
+march_generation_df["geometry"] = gpd.points_from_xy(march_generation_df["NZTM easting"], march_generation_df["NZTM northing"])
 
+
+# Create a geodataframe so that we can map the generation data to each of the NZ regions
 generation_gdf = GeoDataFrame(
     data = march_generation_df,
     geometry = march_generation_df["geometry"],
@@ -186,14 +164,16 @@ generation_gdf = generation_gdf.to_crs(epsg=4326)
 
 result_gdf = gpd.sjoin(generation_gdf, region_gdf, how="left", predicate="within")
 
+# Process the dataframes, including handling duplicates
 region_lookup = result_gdf.drop_duplicates(subset="POC_Code")[["POC_Code", "Region_right"]]
 march_generation_df = march_generation_df.merge(region_lookup, on="POC_Code", how="left")
 march_generation_df["Region"] = march_generation_df["Region"].fillna(march_generation_df.pop("Region_right")) 
 
+# Filter generation by region
 if selected_region != "New Zealand":
     march_generation_df = march_generation_df[march_generation_df["Region"] == selected_region]
 
-# Convert to long format
+# Convert supply data to long format
 supply_long = march_generation_df.melt(
     id_vars=["Trading_Date"],
     value_vars=tp_cols,
@@ -203,17 +183,17 @@ supply_long = march_generation_df.melt(
 # Account for NaN values in the new column
 supply_long["MWh"] = supply_long["MWh"].fillna(0)
 
-# Group by date and get the total supply per date, then calculate the peak, average and minimum values and dates that they fall on
+# Group by date and get the total supply per date, then calculate the peak, average, and minimum values and dates that they fall on
 march_supply_by_day = supply_long.groupby("Trading_Date")["MWh"].sum()
 
-peak_day = march_supply_by_day.idxmax()
-peak_value = march_supply_by_day.max()
+# peak_day = march_supply_by_day.idxmax()
+# peak_value = march_supply_by_day.max()
 
-average_value = march_supply_by_day.mean()
-average_day = (march_supply_by_day - average_value).abs().idxmin()
+# average_value = march_supply_by_day.mean()
+# average_day = (march_supply_by_day - average_value).abs().idxmin()
 
-min_day = march_supply_by_day.idxmin()
-min_value = march_supply_by_day.min()
+# min_day = march_supply_by_day.idxmin()
+# min_value = march_supply_by_day.min()
 
 # Expand the supply data into wide format, with each trading date having multiple trading period columns
 supply_by_date_period = supply_long.groupby(["Trading_Date", "Trading_Period"])["MWh"].sum().reset_index()
@@ -227,6 +207,7 @@ supply_by_date_period = supply_by_date_period.reset_index()
 march_demand_df["Demand (MWh)"] = march_demand_df["Demand (GWh)"] * 1000
 march_demand_df[["Trading_Date", "Trading_Period"]] = march_demand_df["Period start"].str.split(" ", expand=True)
 
+# Filter demand by region
 if selected_region != "New Zealand":
     march_demand_df = march_demand_df[march_demand_df["Region"] == selected_region]
 
@@ -248,11 +229,8 @@ with col1:
     day_options = ["Mon", "Tues", "Wed", "Thurs", "Fri", "Sat", "Sun"]
     selected_day = st.selectbox(label="Day selector", options=day_options)
 
-# supply_values = supply_by_date_period[supply_by_date_period["Trading_Date"].dt.dayofweek == day_options.index(selected_day)].select_dtypes(include="number").mean(axis=0)
-# demand_values = wide_demand[wide_demand["Trading_Date"].dt.dayofweek == day_options.index(selected_day)].select_dtypes(include="number").mean(axis=0)
-
+# Get average electricity demand and supply data/profiles using a helper functoin
 demand_values, supply_values = helper.get_avg_profiles(
-    selected_region,
     day_options.index(selected_day),
     supply_by_date_period,
     wide_demand
@@ -264,29 +242,6 @@ half_hour_times = [
     for i in range(48)
 ]
 
-# if "fig" not in st.session_state:
-#     # Create a plot of the electricity demand vs supply
-#     chart_data = pd.DataFrame({
-#         "Time": half_hour_times,
-#         "Demand (MWh)": demand_values.values,
-#         "Supply (MWh)": supply_values.values
-#     })
-
-#     st.session_state["fig"] = px.line(
-#         chart_data, 
-#         x="Time", 
-#         y=["Demand (MWh)", "Supply (MWh)"],
-#         range_y=[0, chart_data[["Demand (MWh)", "Supply (MWh)"]].max().max() * 1.1]
-#     )
-
-#     st.session_state["fig"].update_layout(
-#         xaxis_title="Time",
-#         yaxis_title="Electricity Amount (MWh)",
-#         xaxis = dict(
-#             dtick=6
-#         ),
-#         height=500
-#     )
 
 # Create a plot of the electricity demand vs supply
 chart_data = pd.DataFrame({
@@ -295,37 +250,38 @@ chart_data = pd.DataFrame({
     "Supply (MWh)": supply_values.values
 })
 
-# fig = px.line(
-#     chart_data, 
-#     x="Time", 
-#     y=["Demand (MWh)", "Supply (MWh)"],
-#     range_y=[0, chart_data[["Demand (MWh)", "Supply (MWh)"]].max().max() * 1.1]
-# )
-
-# fig.update_layout(
-#     xaxis_title="Time",
-#     yaxis_title="Electricity Amount (MWh)",
-#     xaxis = dict(
-#         dtick=6
-#     ),
-#     height=500
-# )
-
+# Only show the relevant data for the selected region
 filtered_region_fleet = region_fleet_df.loc[selected_region.upper()]
+
+# Calculate the existing/current amount of light and heavy electric vehicle proportions 
 current_light_ev_share = (filtered_region_fleet["Light Electric Vehicle Count"] / (filtered_region_fleet["Light Electric Vehicle Count"] + filtered_region_fleet["Light Combustion Vehicle Count"])) * 100
 current_heavy_ev_share = (filtered_region_fleet["Heavy Electric Vehicle Count"] / (filtered_region_fleet["Heavy Electric Vehicle Count"] + filtered_region_fleet["Heavy Combustion Vehicle Count"])) * 100
 
+# Handle changing electric vehicle uptake
 with col1:
-    st.subheader(f"Average Electricity Supply and Demand in by Time for {selected_region}")
-    # st.plotly_chart(fig)
-    # st.plotly_chart(st.session_state["fig"])
+    st.subheader(f"Average Electricity Supply and Demand by Time for {selected_region}")
 
+    # Define a selection box for charging behaviour configuration/interactivity
+    charging_scenarios = ["Status-quo", "Daytime-priority"]
+    charging_behaviour = st.selectbox("Charging Behaviour", charging_scenarios)
+
+    # Define sliders for changing uptake
     target_light_ev_pct = st.slider("Light EV uptake (%)", value=current_light_ev_share, min_value=0.00, max_value=100.00)
     target_heavy_ev_pct = st.slider("Heavy EV uptake (%)", value=current_heavy_ev_share, min_value=0.00, max_value=100.00)
 
+    # Define a number input for setting the "compliance" rate (The percentage of people who follow the user-specified charging pattern)
+    current_compliance = st.number_input("Compliance rate (%)", value=100, min_value=0, max_value=100)
+
+    # Define a slider for increasing existing electricity supply (I.e expanding grid generation and infrastructure)
+    supply_expansion = st.slider("Increase in electricity supply (%)", value=0.00, min_value=0.00, max_value=100.00)
+
+    supply_values = (1 + supply_expansion / 100) * supply_values
+
+    # Calculate the number of vehicles needed to reach each specified uptake target
     needed_light_ev = (target_light_ev_pct / 100) * (filtered_region_fleet["Light Electric Vehicle Count"] + filtered_region_fleet["Light Combustion Vehicle Count"]) - filtered_region_fleet["Light Electric Vehicle Count"]
     needed_heavy_ev = (target_heavy_ev_pct / 100) * (filtered_region_fleet["Heavy Electric Vehicle Count"] + filtered_region_fleet["Heavy Combustion Vehicle Count"]) - filtered_region_fleet["Heavy Electric Vehicle Count"]
 
+    # Estimate the needed kWh by approximating the efficiencies of reference electric vehicles - see dissertation for explanation
     # TODO REMOVE PLACEHOLDER VALUES 
     light_ev_efficiency = 0.18
     heavy_ev_efficiency = 0.80
@@ -338,16 +294,39 @@ with col1:
 
     extra_kWh_day = needed_light_ev * kWh_day_light + needed_heavy_ev * kWh_day_heavy
 
-    profile = np.ones(48) / 48
-    extra_MWh_per_slot = (extra_kWh_day / 1000) * profile
+    # Divide the needed extra electricity across the relevant daily profile/scenario
+    if charging_behaviour == "Status-quo":
+        # Night charging: 18:00–24:00 and 00:00–07:00
+        profile = np.zeros(48)
+        profile[36:48] = 1 
+        profile[0:14]  = 1
+        profile = profile / profile.sum()
 
+    elif charging_behaviour == "Daytime-priority":
+        profile = np.zeros(48)
+        profile[16:34] = 1
+        profile = profile / profile.sum()
+
+    # Define non-compliance to be random charging across the whole day
+    random_profile = np.random.random(48)
+    random_profile = random_profile / random_profile.sum()
+
+    # Account for the compliance rate
+    c = current_compliance / 100.0
+    effective_profile = c * profile + (1 - c) * random_profile
+    effective_profile = effective_profile / effective_profile.sum()
+
+    # Allocate the additional needed energy
+    extra_MWh_per_slot = (extra_kWh_day / 1000.0) * effective_profile
+
+    # Update the data and plot the chart with the new values
     new_demand_values = demand_values.values + extra_MWh_per_slot
     chart_data = pd.DataFrame({
         "Time": half_hour_times,
         "Demand (MWh)": new_demand_values,
         "Supply (MWh)": supply_values.values
     })
-    fig = px.line(chart_data, x="Time", y=["Demand (MWh)", "Supply (MWh)"])
+    fig = px.line(chart_data, x="Time", y=["Demand (MWh)", "Supply (MWh)"], color_discrete_sequence=["#E69F00", "#0072B2"])
 
     fig.update_layout(
             xaxis_title="Time",
@@ -359,14 +338,3 @@ with col1:
         )
 
     st.plotly_chart(fig)
-
-    # fig = st.session_state["fig"]
-
-    # fig.data[0].y = new_demand_values
-    # fig.data[1].y = supply_values.values
-    # fig.update_yaxes(range=[0, 1.1 * max(max(new_demand_values), max(supply_values.values))])
-
-    # with col1:
-    #     st.plotly_chart(st.session_state["fig"], key=f"chart|{selected_region}|{selected_day}")
-
-
