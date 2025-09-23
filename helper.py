@@ -57,22 +57,29 @@ def get_cleaned_fleet_df(fleet_path, ta_region_map):
     return raw_df
 
 @st.cache_resource
-def build_region_fleet_summary(fleet_df):
+def build_region_fleet_summary(fleet_df, is_territorial_view):
     """
     Function that creates a summary dataframe of the New Zealand fleet composition and information, by region, for use in scenarios and interactivity
 
     fleet_df: The dataframe describing the fleet
 
+    is_territorial_view: A bool representing if the current map view has been set to show electricity grid zone or territorial authority
+
     Returns: A dataframe representing the summarised information
     """
     # Get the list of regions that the vehicles could be associated with from the dataframe
-    vehicle_regions = fleet_df["REGION"].unique()
+    if is_territorial_view == False:
+        region_col = "REGION"
+    elif is_territorial_view == True:
+        region_col = "TLA"
+    
+    vehicle_regions = fleet_df[region_col].unique()
 
     # For each region, create a row that contains information about the size and characteristics/composition of the vehicles in that region
     rows_list = []
 
     for region in vehicle_regions:
-        filtered_fleet_df = fleet_df[fleet_df["REGION"] == region]
+        filtered_fleet_df = fleet_df[fleet_df[region_col] == region]
 
         # Filter to get different relevant values such as the number of total electric vehicles in the given region
         electric_mask = get_electric_mask(filtered_fleet_df)
