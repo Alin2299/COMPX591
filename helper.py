@@ -1,7 +1,5 @@
 """
-Python file that contains helper code/functions for the project code; in particular, functions that help implement Streamlit caching properly
-
-Note the use of caching with some of the functions to help optimise performance
+Python file that contains helper functions for the tool and its functionality; the functions (which often are called regularly) implement Streamlit caching to optimise performance
 """
 
 # Import the necessary libraries/packages
@@ -12,20 +10,23 @@ import geopandas as gpd
 @st.cache_resource
 def load_file(path, num_skip_rows=0): 
     """
-    Function that loads in a CSV file as a Pandas dataframe
+    Function that loads in a CSV file as a Pandas dataframe (with basic error-handling)
 
     path: Path to the file to be read in
 
     Returns: A dataframe containing the data from the file
     """
-    df = pd.read_csv(path, skiprows=num_skip_rows)
-
-    return df
+    try:
+        df = pd.read_csv(path, skiprows=num_skip_rows)
+        return df
+    except Exception:
+        st.warning(f"Invalid file with path: {path}")
+        return pd.DataFrame()
 
 
 def get_electric_mask(df):
     """
-    Function that returns a mask for filtering out electric vs non-electric powered vehicles in the fleet dataframes
+    Function that returns a mask for filtering out electric vs non-electric powered vehicles in the fleet dataframe(s)
 
     df: Dataframe to be processed
 
@@ -46,7 +47,7 @@ def get_cleaned_fleet_df(fleet_path, ta_region_map):
 
     """
 
-    # Load and apply  mapping
+    # Load and apply mapping
     raw_df = load_file(fleet_path)
     raw_df["REGION"] = raw_df["TLA"].map(ta_region_map)
 
@@ -59,11 +60,11 @@ def get_cleaned_fleet_df(fleet_path, ta_region_map):
 @st.cache_resource
 def build_region_fleet_summary(fleet_df, is_territorial_view):
     """
-    Function that creates a summary dataframe of the New Zealand fleet composition and information, by region, for use in scenarios and interactivity
+    Function that creates a summary dataframe of the New Zealand vehicle fleet composition and information by region, for use in the interactive configuration
 
     fleet_df: The dataframe describing the fleet
 
-    is_territorial_view: A bool representing if the current map view has been set to show electricity grid zone or territorial authority
+    is_territorial_view: A bool representing if the current map view has been set to show electricity grid zones or territorial authorities
 
     Returns: A dataframe representing the summarised information
     """
@@ -81,7 +82,7 @@ def build_region_fleet_summary(fleet_df, is_territorial_view):
     for region in vehicle_regions:
         filtered_fleet_df = fleet_df[fleet_df[region_col] == region]
 
-        # Filter to get different relevant values such as the number of total electric vehicles in the given region
+        # Filter to get different relevant values such as the total electric vehicles in the given region
         electric_mask = get_electric_mask(filtered_fleet_df)
         num_light_electric_vehicles = filtered_fleet_df[(electric_mask) & (filtered_fleet_df["GROSS_VEHICLE_MASS"] <= 3500)].shape[0]
         num_heavy_electric_vehicles = filtered_fleet_df[(electric_mask) & (filtered_fleet_df["GROSS_VEHICLE_MASS"] > 3500)].shape[0]
@@ -97,6 +98,7 @@ def build_region_fleet_summary(fleet_df, is_territorial_view):
             "Light Combustion Vehicle Count": num_light_combustion_vehicles,
             "Heavy Combustion Vehicle Count": num_heavy_combustion_vehicles
         })
+    # Process as appropriate (including handling vehicles for the whole of New Zealand)
     summary_df = pd.DataFrame(rows_list).set_index("Region")
     totals_row = summary_df.sum()
 
@@ -107,7 +109,7 @@ def build_region_fleet_summary(fleet_df, is_territorial_view):
 @st.cache_resource
 def get_avg_profiles(day_index, supply_df, demand_df):
     """
-    Function that calculates the average supply and demand profile for a given region and weekday index
+    Function that gets the average supply and demand profiles for a given region and weekday index
 
     day_index: The array index that corresponds to the user-selected day of the week to be profiled
     supply_df: The processed electricity supply dataframe
@@ -115,6 +117,8 @@ def get_avg_profiles(day_index, supply_df, demand_df):
 
     Returns: The average electricity supply and demand profiles
     """
+
+    # Convert the columns in the dataframes for date information to the correct and consistent format
     supply_df["Trading_Date"] = pd.to_datetime(supply_df["Trading_Date"])
     demand_df["Trading_Date"] = pd.to_datetime(demand_df["Trading_Date"])
 
@@ -134,13 +138,15 @@ def get_ta_region_map(ta_path, _region_gdf):
 
     Returns: A processed dictionary representing the final joined data/mapping
     """
+
+    # Process the geodataframes then apply the join
     ta_gdf = gpd.read_file(ta_path).to_crs(epsg=4326)
     region_gdf = _region_gdf.to_crs(epsg=4326)
     region_gdf["geometry"] = region_gdf.buffer(0)
 
     ta_with_regions = gpd.sjoin(ta_gdf, region_gdf, how="left", predicate="intersects")
 
-    # Handle uppercase words
+    # Handle uppercase words in the columns/data
     ta_region_map = dict(zip(ta_with_regions["TA2025_V_2"], ta_with_regions["Region"]))
     return {k.upper(): v.upper() for k, v in ta_region_map.items()}
 

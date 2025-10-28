@@ -1,14 +1,14 @@
 """
-Python file for Prototype 1 of the model, which will be able to load in and process data to show some basic visualisations of electricity demand and supply
+Python file for Prototype 1 of the model, which will be able to load in and process real-world data to show some basic visualisations of electricity demand and supply
 """
 
 # Import the necessary libraries/packages
 import streamlit as st
 import pandas as pd
-import numpy as np
 import helper 
 import plotly.express as px
 
+# Setup the header
 st.title("Interactive Electricity Grid Model - Prototype 1")
 
 # Get the relevant data paths/files
@@ -26,7 +26,7 @@ electric_vehicles["MAKE_MODEL"] = electric_vehicles["MAKE"] + " " + electric_veh
 most_common_ev = electric_vehicles["MAKE_MODEL"].mode()[0]
 year_common_ev = electric_vehicles[electric_vehicles["MAKE_MODEL"] == most_common_ev]["VEHICLE_YEAR"].mode()[0]
 
-# Get electriciy demand stats
+# Get electricity demand stats
 average_hourly_usage_mw = electricity_demand_ytd["NZ TOTAL(MW)"].sum() / electricity_demand_ytd["Date"].count()
 average_daily_usage_gw = average_hourly_usage_mw * 24 / 1000
 
