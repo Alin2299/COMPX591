@@ -69,7 +69,6 @@ col1, col2 = st.columns([0.5, 0.5])
 
 # Load relevant data from their stored paths using a helper function
 data_dir = "Data/"
-fleet_df = helper.load_file(f"{data_dir}Fleet-31Mar2025.csv")
 march_generation_df = helper.load_file(f"{data_dir}202503_Generation_MD.csv")
 network_mapping_df = helper.load_file(f"{data_dir}20250614_NetworkSupplyPointsTable.csv")
 ta_path =  f"{data_dir}territorial-authority-2025.json"
